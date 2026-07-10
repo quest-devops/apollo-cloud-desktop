@@ -1,6 +1,7 @@
 <Application xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance'>
   <VisualElements
 	ForegroundText="light"
+  BackgroundColor="#141414"
   ShowNameOnSquare150x150Logo="on"
   Square150x150Logo="visualelements\Nextcloud-w10starttile.png"
 	Square70x70Logo="visualelements\Nextcloud-w10starttile.png"/>
