@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Apollo Cloud — compila e EMPACOTA o instalador Windows do cliente branded.
+# Diferente do windows-build-and-test.yml oficial (que só compila+testa em PR),
+# este roda sob demanda (workflow_dispatch) e no push da branch apollo-brand,
+# gera o instalador via Craft (NullsoftInstallerPackager) e publica como artefato.
+name: Apollo Cloud - Windows Installer
+on:
+  workflow_dispatch:
+  push:
+    branches: [apollo-brand]
+jobs:
+  build:
+    name: Build & Package (Windows)
+    runs-on: windows-2022
+    env:
+      CRAFT_TARGET: windows-msvc2022_64-cl
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}\CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}\craftmaster.ini
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Craft + client deps
+        shell: pwsh
+        run: |
+          & cmd /C "git clone -q --depth=1 https://invent.kde.org/packaging/craftmaster.git ${{ env.CRAFT_MASTER_LOCATION }} 2>&1"
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|stable-34.0|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|stable-34.0|"
+          craft craft
+          craft --install-deps nextcloud-client
+
+      - name: Install Inkscape (icon rasterization)
+        shell: pwsh
+        run: choco install inkscape -y --no-progress
+
+      - name: Compile
+        shell: pwsh
+        run: |
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          craft --src-dir ${{ github.workspace }} nextcloud-client
+
+      - name: Package installer
+        shell: pwsh
+        run: |
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          craft --package nextcloud-client
+
+      - name: Collect installer(s)
+        shell: pwsh
+        run: |
+          $dest = "${{ github.workspace }}\_dist"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          # instaladores do Craft: .exe/.msi fora das pastas de build/objeto
+          $found = Get-ChildItem -Path "${{ github.workspace }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\work\\build\\|\\build\\nextcloud-client\\|\\bin\\' }
+          if (-not $found) {
+            Write-Host "Nenhum instalador localizado — listando todos os .exe/.msi p/ diagnostico:"
+            Get-ChildItem -Path "${{ github.workspace }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue | Select-Object FullName, Length
+          } else {
+            $found | ForEach-Object { Copy-Item $_.FullName -Destination $dest -Force; Write-Host ("coletado: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)") }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apollo-cloud-windows-installer
+          path: ${{ github.workspace }}\_dist\**
+          if-no-files-found: warn
