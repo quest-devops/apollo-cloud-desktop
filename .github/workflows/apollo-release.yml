@@ -51,6 +51,27 @@ jobs:
           }
           craft --src-dir ${{ github.workspace }} nextcloud-client
 
+      - name: Patch upstream blueprint (import os)
+        shell: pwsh
+        run: |
+          # Bug upstream em craft-blueprints-nextcloud@stable-34.0: nextcloud-client.py
+          # usa os.path.join em createPackage() sem 'import os' (o wildcard import
+          # deixou de reexportar 'os' na revisao do Craft fixada no craftmaster.ini).
+          # -> NameError ao empacotar. Injeta o import antes do package.
+          $bp = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\etc\blueprints\locations\craft-blueprints-nextcloud\nextcloud-client\nextcloud-client.py"
+          if (Test-Path $bp) {
+            $c = Get-Content $bp -Raw
+            if ($c -notmatch '(?m)^import os\b') {
+              Set-Content $bp ("import os`r`n" + $c) -Encoding utf8
+              Write-Host "[apollo] blueprint corrigido: 'import os' adicionado"
+            } else {
+              Write-Host "[apollo] blueprint ja possui 'import os' — nada a fazer"
+            }
+          } else {
+            Write-Host "[apollo] AVISO: blueprint nao encontrado em $bp"
+            exit 1
+          }
+
       - name: Package installer
         shell: pwsh
         run: |
