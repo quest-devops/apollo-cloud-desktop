@@ -51,26 +51,20 @@ jobs:
           }
           craft --src-dir ${{ github.workspace }} nextcloud-client
 
-      - name: Patch upstream blueprint (import os)
+      - name: Patch upstream blueprint (import os + marca Apollo)
         shell: pwsh
         run: |
-          # Bug upstream em craft-blueprints-nextcloud@stable-34.0: nextcloud-client.py
-          # usa os.path.join em createPackage() sem 'import os' (o wildcard import
-          # deixou de reexportar 'os' na revisao do Craft fixada no craftmaster.ini).
-          # -> NameError ao empacotar. Injeta o import antes do package.
+          # (1) Bug upstream em craft-blueprints-nextcloud@stable-34.0: nextcloud-client.py
+          #     usa os.path.join em createPackage() sem 'import os' -> NameError.
+          # (2) appname/company do blueprint ainda sao Nextcloud -> Apollo.
           $bp = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\etc\blueprints\locations\craft-blueprints-nextcloud\nextcloud-client\nextcloud-client.py"
-          if (Test-Path $bp) {
-            $c = Get-Content $bp -Raw
-            if ($c -notmatch '(?m)^import os\b') {
-              Set-Content $bp ("import os`r`n" + $c) -Encoding utf8
-              Write-Host "[apollo] blueprint corrigido: 'import os' adicionado"
-            } else {
-              Write-Host "[apollo] blueprint ja possui 'import os' — nada a fazer"
-            }
-          } else {
-            Write-Host "[apollo] AVISO: blueprint nao encontrado em $bp"
-            exit 1
-          }
+          if (-not (Test-Path $bp)) { Write-Host "[apollo] AVISO: blueprint nao encontrado em $bp"; exit 1 }
+          $c = Get-Content $bp -Raw
+          if ($c -notmatch '(?m)^import os\b') { $c = "import os`r`n" + $c; Write-Host "[apollo] +import os" }
+          $c = $c -replace '(?m)(self\.defines\["appname"\]\s*=\s*)"nextcloud"', '$1"apollocloud"'
+          $c = $c -replace '(?m)(self\.defines\["company"\]\s*=\s*)"Nextcloud GmbH"', '$1"Apollo Solution"'
+          Set-Content $bp $c -Encoding utf8 -NoNewline
+          Write-Host "[apollo] blueprint patchado (import os, appname=apollocloud, company=Apollo Solution)"
 
       - name: Package installer
         shell: pwsh
@@ -81,20 +75,25 @@ jobs:
           }
           craft --package nextcloud-client
 
-      - name: Collect installer(s)
+      - name: Collect installer
         shell: pwsh
         run: |
           $dest = "${{ github.workspace }}\_dist"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          # instaladores do Craft: .exe/.msi fora das pastas de build/objeto
-          $found = Get-ChildItem -Path "${{ github.workspace }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '\\work\\build\\|\\build\\nextcloud-client\\|\\bin\\' }
-          if (-not $found) {
-            Write-Host "Nenhum instalador localizado — listando todos os .exe/.msi p/ diagnostico:"
-            Get-ChildItem -Path "${{ github.workspace }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue | Select-Object FullName, Length
-          } else {
-            $found | ForEach-Object { Copy-Item $_.FullName -Destination $dest -Force; Write-Host ("coletado: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)") }
+          # O instalador tem dezenas de MB; os utilitarios do Craft sao < 1 MB.
+          $inst = Get-ChildItem -Path "${{ github.workspace }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue |
+            Where-Object { $_.Length -gt 5MB -and $_.FullName -notmatch '\\work\\build\\|\\bin\\' } |
+            Sort-Object Length -Descending
+          if (-not $inst) {
+            Write-Host "Nenhum instalador (> 5MB) encontrado; diagnostico:"
+            Get-ChildItem -Path "${{ github.workspace }}" -Recurse -Include *.exe,*.msi -ErrorAction SilentlyContinue |
+              Sort-Object Length -Descending | Select-Object -First 10 FullName, Length
+            exit 1
           }
+          $main = $inst[0]
+          $target = Join-Path $dest ("ApolloCloud-Setup-x64" + $main.Extension)
+          Copy-Item $main.FullName -Destination $target -Force
+          Write-Host ("instalador: " + $main.Name + " (" + [math]::Round($main.Length/1MB,1) + " MB) -> " + (Split-Path $target -Leaf))
 
       - uses: actions/upload-artifact@v4
         with:
