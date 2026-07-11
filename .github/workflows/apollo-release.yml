@@ -74,6 +74,17 @@ jobs:
           Set-Content $bp $c -Encoding utf8 -NoNewline
           Write-Host "[apollo] blueprint patchado (import os, appname, company, productname=ApolloCloud, icon=$icon)"
 
+          # blacklist.txt do Craft remove 'bin/*.exe' cujo nome != nextcloud/nextcloudcmd.
+          # Com o rename p/ apollocloud.exe, isso APAGAVA o executavel do app do pacote
+          # (sobravam so as DLLs). Inclui apollocloud/apollocloudcmd nas excecoes.
+          $bl = "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\etc\blueprints\locations\craft-blueprints-nextcloud\nextcloud-client\blacklist.txt"
+          if (Test-Path $bl) {
+            $blc = Get-Content $bl -Raw
+            $blc = $blc.Replace('nextcloud|nextcloudcmd|QtWebEngineProcess', 'nextcloud|nextcloudcmd|apollocloud|apollocloudcmd|QtWebEngineProcess')
+            Set-Content $bl $blc -Encoding utf8 -NoNewline
+            Write-Host "[apollo] blacklist corrigido (preserva apollocloud.exe/apollocloudcmd.exe)"
+          } else { Write-Host "[apollo] AVISO: blacklist.txt nao encontrado em $bl"; exit 1 }
+
       - name: Package installer
         shell: pwsh
         run: |
