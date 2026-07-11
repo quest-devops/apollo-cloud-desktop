@@ -67,9 +67,12 @@ jobs:
           $icon = "${{ github.workspace }}\admin\win\nsi\installer.ico"
           $appLine  = '        self.defines["appname"] = "apollocloud"'
           $iconLine = '        self.defines["icon"] = r"' + $icon + '"'
-          $c = $c -replace '(?m)^[ \t]*self\.defines\["appname"\]\s*=\s*"nextcloud".*$', ($appLine + "`r`n" + $iconLine)
+          # productname controla o nome exibido no instalador, a pasta em Program Files
+          # e o DisplayName no "Programas e Recursos" -> sem ele, tudo fica "Nextcloud".
+          $prodLine = '        self.defines["productname"] = "ApolloCloud"'
+          $c = $c -replace '(?m)^[ \t]*self\.defines\["appname"\]\s*=\s*"nextcloud".*$', ($appLine + "`r`n" + $iconLine + "`r`n" + $prodLine)
           Set-Content $bp $c -Encoding utf8 -NoNewline
-          Write-Host "[apollo] blueprint patchado (import os, appname, company, icon=$icon)"
+          Write-Host "[apollo] blueprint patchado (import os, appname, company, productname=ApolloCloud, icon=$icon)"
 
       - name: Package installer
         shell: pwsh
