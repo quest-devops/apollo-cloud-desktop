@@ -144,6 +144,9 @@
 
 		<file alias="theme/black/state-info.svg">theme/black/@STATE_SUBDIR@state-info.svg</file>
 
+		<!-- [apollo] fonte de marca Inter (variavel: todos os pesos num arquivo) -->
+		<file>theme/fonts/InterVariable.ttf</file>
+
 		<!-- other icons -->
 
 		<!-- colored icons -->

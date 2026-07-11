@@ -56,6 +56,8 @@
 #include <QPushButton>
 #include <QAbstractButton>
 #include <QFileOpenEvent>
+#include <QFontDatabase>
+#include <QFont>
 
 #include <iostream>
 
@@ -233,6 +235,20 @@ Application::Application(int &argc, char **argv)
     , _theme(Theme::instance())
 {
     _startedAt.start();
+
+    // [apollo] Fonte de marca Inter em toda a UI (widgets + QML). Carrega a fonte
+    // variavel embarcada e troca APENAS a familia da fonte da aplicacao; tamanhos e
+    // pesos herdados ficam identicos ao original (Style.qml deriva os tamanhos do
+    // FontMetrics da fonte da aplicacao e nenhum QML fixa 'font.family').
+    {
+        const int interId = QFontDatabase::addApplicationFont(QStringLiteral(":/client/theme/fonts/InterVariable.ttf"));
+        const QStringList interFamilies = interId != -1 ? QFontDatabase::applicationFontFamilies(interId) : QStringList{};
+        if (!interFamilies.isEmpty()) {
+            QFont brandFont = font();
+            brandFont.setFamily(interFamilies.constFirst());
+            setFont(brandFont);
+        }
+    }
 
 #ifdef Q_OS_WIN
     // Ensure OpenSSL config file is only loaded from app directory
