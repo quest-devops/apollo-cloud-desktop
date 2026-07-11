@@ -61,10 +61,15 @@ jobs:
           if (-not (Test-Path $bp)) { Write-Host "[apollo] AVISO: blueprint nao encontrado em $bp"; exit 1 }
           $c = Get-Content $bp -Raw
           if ($c -notmatch '(?m)^import os\b') { $c = "import os`r`n" + $c; Write-Host "[apollo] +import os" }
-          $c = $c -replace '(?m)(self\.defines\["appname"\]\s*=\s*)"nextcloud"', '$1"apollocloud"'
           $c = $c -replace '(?m)(self\.defines\["company"\]\s*=\s*)"Nextcloud GmbH"', '$1"Apollo Solution"'
+          # appname + icone do instalador (o packager NSIS le self.defines["icon"] -> MUI_ICON;
+          # o admin/win/nsi/installer.ico do repo e ignorado pelo template do Craft).
+          $icon = "${{ github.workspace }}\admin\win\nsi\installer.ico"
+          $appLine  = '        self.defines["appname"] = "apollocloud"'
+          $iconLine = '        self.defines["icon"] = r"' + $icon + '"'
+          $c = $c -replace '(?m)^[ \t]*self\.defines\["appname"\]\s*=\s*"nextcloud".*$', ($appLine + "`r`n" + $iconLine)
           Set-Content $bp $c -Encoding utf8 -NoNewline
-          Write-Host "[apollo] blueprint patchado (import os, appname=apollocloud, company=Apollo Solution)"
+          Write-Host "[apollo] blueprint patchado (import os, appname, company, icon=$icon)"
 
       - name: Package installer
         shell: pwsh
