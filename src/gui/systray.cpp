@@ -591,7 +591,8 @@ void Systray::setupContextMenu()
     auto pauseAction = _contextMenu->addAction(tr("Pause sync"), this, &Systray::slotPauseAllFolders);
     auto resumeAction = _contextMenu->addAction(tr("Resume sync"), this, &Systray::slotUnpauseAllFolders);
     _contextMenu->addAction(tr("Settings"), this, &Systray::openSettings);
-    _contextMenu->addAction(tr("Help"), this, &Systray::openHelp);
+    // [apollo] item "Help" removido do menu da bandeja: abria a URL de ajuda do
+    // Nextcloud (Theme::helpUrl). Sem ele o menu fica Settings -> Exit.
     _contextMenu->addAction(tr("Exit %1").arg(Theme::instance()->appNameGUI()), this, &Systray::shutdown);
 
     connect(_contextMenu, &QMenu::aboutToShow, [=] {
