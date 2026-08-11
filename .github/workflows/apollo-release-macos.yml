@@ -70,9 +70,12 @@ jobs:
           # (2) appname/company/productname do blueprint ainda sao Nextcloud.
           bp="$GITHUB_WORKSPACE/$CRAFT_TARGET/etc/blueprints/locations/craft-blueprints-nextcloud/nextcloud-client/nextcloud-client.py"
           if [ ! -f "$bp" ]; then echo "[apollo] AVISO: blueprint nao encontrado em $bp"; exit 1; fi
-          python3 - "$bp" <<'PYEOF'
+          # O bundle chama "Apollo Cloud.app" (APPLICATION_NAME) e o CMake instala com o
+          # prefixo absoluto replicado dentro do image dir -> o glob por appname falha.
+          # apppath = caminho RELATIVO ao archiveDir do Craft (workspace sem a barra inicial).
+          python3 - "$bp" "${GITHUB_WORKSPACE#/}/$CRAFT_TARGET/Apollo Cloud.app" <<'PYEOF'
           import io, re, sys
-          p = sys.argv[1]
+          p, apppath = sys.argv[1], sys.argv[2]
           c = io.open(p, encoding="utf-8").read()
           if not re.search(r"(?m)^import os\b", c):
               c = "import os\n" + c
@@ -80,11 +83,15 @@ jobs:
           c = re.sub(r'(?m)(self\.defines\["company"\]\s*=\s*)"Nextcloud GmbH"', r'\1"Apollo Solution"', c)
           c = re.sub(
               r'(?m)^([ \t]*)self\.defines\["appname"\]\s*=\s*"nextcloud".*$',
-              r'\1self.defines["appname"] = "apollocloud"\n\1self.defines["productname"] = "ApolloCloud"',
+              lambda m: (
+                  m.group(1) + 'self.defines["appname"] = "Apollo Cloud"\n'
+                  + m.group(1) + 'self.defines["apppath"] = ' + repr(apppath) + '\n'
+                  + m.group(1) + 'self.defines["productname"] = "ApolloCloud"'
+              ),
               c,
           )
           io.open(p, "w", encoding="utf-8", newline="").write(c)
-          print("[apollo] blueprint patchado (import os, appname, company, productname)")
+          print("[apollo] blueprint patchado (import os, appname='Apollo Cloud', apppath=%r, company)" % apppath)
           PYEOF
           # blacklist.txt: no Windows apagava o executavel renomeado; no mac o app é
           # um bundle, mas aplicamos a mesma correção por segurança (warn-only).
