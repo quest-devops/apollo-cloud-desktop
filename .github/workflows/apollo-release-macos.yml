@@ -140,3 +140,23 @@ jobs:
           name: apollo-cloud-macos-app
           path: ${{ github.workspace }}/_dist/**
           if-no-files-found: warn
+
+      # ---- Diagnóstico: só roda quando algum passo acima falhou ----
+      - name: Debug codesign (mesmo comando do craft, saida visivel)
+        if: failure()
+        run: |
+          APP="$GITHUB_WORKSPACE/$CRAFT_TARGET/build/nextcloud-client/archive/${GITHUB_WORKSPACE#/}/$CRAFT_TARGET/Apollo Cloud.app"
+          echo "== bundle: $APP"
+          ls -la "$APP/Contents" 2>/dev/null | head -15 || echo "(bundle nao encontrado)"
+          echo "== codesign ad-hoc manual (comando identico ao utils.localSignMac):"
+          codesign -s - -f --deep --preserve-metadata=identifier,entitlements --verbose=99 "$APP" 2>&1 | tail -40 || echo "[debug] codesign falhou: exit=$?"
+          echo "== verificacao estrita:"
+          codesign -vvv --deep --strict "$APP" 2>&1 | tail -20 || echo "[debug] verify falhou: exit=$?"
+
+      - name: Upload craft logs (diagnostico)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: craft-logs
+          path: ${{ github.workspace }}/${{ env.CRAFT_TARGET }}/logs/**
+          if-no-files-found: warn
