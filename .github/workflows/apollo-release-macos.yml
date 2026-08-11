@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Apollo Cloud — compila e EMPACOTA o app macOS (Apple Silicon) do cliente branded.
 # Espelho do apollo-release.yml (Windows): roda sob demanda (workflow_dispatch) e
-# no push da branch apollo-brand, compila via Craft, patcha o blueprint upstream
-# (marca Apollo + bug do 'import os') e publica o .dmg como artefato.
+# no push da branch apollo-brand; publica o .dmg como artefato.
 #
-# SEM assinatura/notarização por enquanto (SIGN_PACKAGE=False no craftmaster.ini):
-# o Gatekeeper bloqueia o 1º open — instruir clique-direito > Abrir. Assinatura
-# exige Apple Developer Program (pendência registrada no README do app).
+# Empacotamento: NAO usamos `craft --package` no mac — o CollectionPackager do
+# Craft monta o archive a partir dos images das dependencias e perde o bundle do
+# cliente (o image dele replica o prefixo absoluto de instalacao) -> sobra uma
+# casca sem Info.plist -> codesign "bundle format unrecognized". Como o proprio
+# build ja roda macdeployqt em POST_BUILD (src/gui/CMakeLists.txt:784), o bundle
+# que o install deixa no image e AUTOCONTIDO (Qt + QML + plugins + ad-hoc sign).
+# Basta: verificar -> re-sign ad-hoc -> hdiutil.
+#
+# SEM Developer ID/notarizacao por enquanto: Gatekeeper pede clique-direito >
+# Abrir no 1o uso (pendencia E3 no ApolloPlan).
 name: Apollo Cloud - macOS App
 on:
   workflow_dispatch:
@@ -63,95 +69,32 @@ jobs:
           # motor de sync classico, igual ao build Windows.
           craft --options nextcloud-client.buildFileProviderModule=False --src-dir "$GITHUB_WORKSPACE" nextcloud-client
 
-      - name: Patch upstream blueprint (import os + marca Apollo)
+      - name: Package (.dmg direto do bundle do image)
         run: |
-          # Mesmos dois problemas contornados no apollo-release.yml (Windows):
-          # (1) nextcloud-client.py usa os.path.join em createPackage() sem 'import os';
-          # (2) appname/company/productname do blueprint ainda sao Nextcloud.
-          bp="$GITHUB_WORKSPACE/$CRAFT_TARGET/etc/blueprints/locations/craft-blueprints-nextcloud/nextcloud-client/nextcloud-client.py"
-          if [ ! -f "$bp" ]; then echo "[apollo] AVISO: blueprint nao encontrado em $bp"; exit 1; fi
-          # O bundle chama "Apollo Cloud.app" (APPLICATION_NAME) e o CMake instala com o
-          # prefixo absoluto replicado dentro do image dir -> o glob por appname falha.
-          # apppath = caminho RELATIVO ao archiveDir do Craft (workspace sem a barra inicial).
-          python3 - "$bp" "${GITHUB_WORKSPACE#/}/$CRAFT_TARGET/Apollo Cloud.app" <<'PYEOF'
-          import io, re, sys
-          p, apppath = sys.argv[1], sys.argv[2]
-          c = io.open(p, encoding="utf-8").read()
-          if not re.search(r"(?m)^import os\b", c):
-              c = "import os\n" + c
-              print("[apollo] +import os")
-          c = re.sub(r'(?m)(self\.defines\["company"\]\s*=\s*)"Nextcloud GmbH"', r'\1"Apollo Solution"', c)
-          c = re.sub(
-              r'(?m)^([ \t]*)self\.defines\["appname"\]\s*=\s*"nextcloud".*$',
-              lambda m: (
-                  m.group(1) + 'self.defines["appname"] = "Apollo Cloud"\n'
-                  + m.group(1) + 'self.defines["apppath"] = ' + repr(apppath) + '\n'
-                  + m.group(1) + 'self.defines["productname"] = "ApolloCloud"'
-              ),
-              c,
-          )
-          io.open(p, "w", encoding="utf-8", newline="").write(c)
-          print("[apollo] blueprint patchado (import os, appname='Apollo Cloud', apppath=%r, company)" % apppath)
-          PYEOF
-          # blacklist.txt: no Windows apagava o executavel renomeado; no mac o app é
-          # um bundle, mas aplicamos a mesma correção por segurança (warn-only).
-          bl="$GITHUB_WORKSPACE/$CRAFT_TARGET/etc/blueprints/locations/craft-blueprints-nextcloud/nextcloud-client/blacklist.txt"
-          if [ -f "$bl" ] && grep -q 'nextcloud|nextcloudcmd|QtWebEngineProcess' "$bl"; then
-            python3 - "$bl" <<'PYEOF'
-          import io, sys
-          p = sys.argv[1]
-          c = io.open(p, encoding="utf-8").read()
-          c = c.replace('nextcloud|nextcloudcmd|QtWebEngineProcess',
-                        'nextcloud|nextcloudcmd|apollocloud|apollocloudcmd|QtWebEngineProcess')
-          io.open(p, "w", encoding="utf-8", newline="").write(c)
-          print("[apollo] blacklist corrigido (preserva apollocloud/apollocloudcmd)")
-          PYEOF
-          else
-            echo "[apollo] blacklist sem o padrao esperado (ok no mac, seguindo)"
-          fi
-
-      - name: Package (.dmg)
-        run: |
-          craft() {
-            python "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
-          }
-          craft --package nextcloud-client
-
-      - name: Collect app
-        run: |
-          dest="$GITHUB_WORKSPACE/_dist"
-          mkdir -p "$dest"
-          # o .dmg do app tem dezenas de MB; ignora caches/builds intermediarios
-          # -print0 + xargs -0: caminhos do Craft podem ter espaco ("Apollo Cloud")
-          main=$(find "$GITHUB_WORKSPACE" \( -name "*.dmg" -o -name "*.pkg" \) -size +5M \
-                    -not -path "*/craft-clone/*" -not -path "*/CraftMaster/*" \
-                    -not -path "*/work/build/*" -print0 2>/dev/null | xargs -0 ls -1S 2>/dev/null | head -1)
-          if [ -z "$main" ]; then
-            echo "Nenhum .dmg/.pkg (>5MB) encontrado; diagnostico:"
-            find "$GITHUB_WORKSPACE" \( -name "*.dmg" -o -name "*.pkg" \) -exec ls -lh {} \; 2>/dev/null | head -20
-            exit 1
-          fi
-          ext="${main##*.}"
-          cp "$main" "$dest/ApolloCloud-macOS-arm64.$ext"
-          ls -lh "$dest"
+          APP=$(find "$GITHUB_WORKSPACE/$CRAFT_TARGET/build/nextcloud-client" -maxdepth 12 -type d -name "Apollo Cloud.app" -path "*image-*" | head -1)
+          if [ -z "$APP" ]; then echo "[apollo] bundle nao encontrado no image"; exit 1; fi
+          echo "== bundle: $APP"
+          plutil -p "$APP/Contents/Info.plist" | head -12
+          echo "== smoke test (apollocloudcmd --version):"
+          "$APP/Contents/MacOS/apollocloudcmd" --version || echo "[apollo] AVISO: apollocloudcmd --version falhou (exit $?)"
+          echo "== re-sign ad-hoc (belt & braces; macdeployqt ja assinou):"
+          codesign -s - -f --deep --preserve-metadata=identifier,entitlements "$APP" \
+            || echo "[apollo] AVISO: re-sign falhou; mantendo assinatura do macdeployqt"
+          echo "== verificacao estrita (gate):"
+          codesign -vvv --deep --strict "$APP"
+          STAGE="$GITHUB_WORKSPACE/_stage"
+          mkdir -p "$STAGE"
+          ditto "$APP" "$STAGE/Apollo Cloud.app"
+          ln -s /Applications "$STAGE/Applications"
+          mkdir -p "$GITHUB_WORKSPACE/_dist"
+          hdiutil create -volname "ApolloDrive" -srcfolder "$STAGE" -ov -format UDZO "$GITHUB_WORKSPACE/_dist/ApolloDrive-macOS.dmg"
+          ls -lh "$GITHUB_WORKSPACE/_dist"
 
       - uses: actions/upload-artifact@v4
         with:
           name: apollo-cloud-macos-app
           path: ${{ github.workspace }}/_dist/**
           if-no-files-found: warn
-
-      # ---- Diagnóstico: só roda quando algum passo acima falhou ----
-      - name: Debug codesign (mesmo comando do craft, saida visivel)
-        if: failure()
-        run: |
-          APP="$GITHUB_WORKSPACE/$CRAFT_TARGET/build/nextcloud-client/archive/${GITHUB_WORKSPACE#/}/$CRAFT_TARGET/Apollo Cloud.app"
-          echo "== bundle: $APP"
-          ls -la "$APP/Contents" 2>/dev/null | head -15 || echo "(bundle nao encontrado)"
-          echo "== codesign ad-hoc manual (comando identico ao utils.localSignMac):"
-          codesign -s - -f --deep --preserve-metadata=identifier,entitlements --verbose=99 "$APP" 2>&1 | tail -40 || echo "[debug] codesign falhou: exit=$?"
-          echo "== verificacao estrita:"
-          codesign -vvv --deep --strict "$APP" 2>&1 | tail -20 || echo "[debug] verify falhou: exit=$?"
 
       - name: Upload craft logs (diagnostico)
         if: failure()
