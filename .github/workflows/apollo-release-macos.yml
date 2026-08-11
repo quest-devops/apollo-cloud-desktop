@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Apollo Cloud — compila e EMPACOTA o app macOS (Apple Silicon) do cliente branded.
+# Espelho do apollo-release.yml (Windows): roda sob demanda (workflow_dispatch) e
+# no push da branch apollo-brand, compila via Craft, patcha o blueprint upstream
+# (marca Apollo + bug do 'import os') e publica o .dmg como artefato.
+#
+# SEM assinatura/notarização por enquanto (SIGN_PACKAGE=False no craftmaster.ini):
+# o Gatekeeper bloqueia o 1º open — instruir clique-direito > Abrir. Assinatura
+# exige Apple Developer Program (pendência registrada no README do app).
+name: Apollo Cloud - macOS App
+on:
+  workflow_dispatch:
+  push:
+    branches: [apollo-brand]
+jobs:
+  build:
+    name: Build & Package (macOS arm64)
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      CRAFT_TARGET: macos-clang-arm64
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}/CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}/craftmaster.ini
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode 16.3
+        run: |
+          # mesmo Xcode que o macos-craft-ci.yml do upstream usa nesta branch;
+          # se a imagem do runner nao tiver, segue com o default dela.
+          ls -1 /Applications | grep -i xcode || true
+          sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer \
+            || echo "[apollo] Xcode 16.3 ausente; usando o default do runner"
+          xcodebuild -version
+
+      - uses: actions/setup-python@v5
+        with:
+          # precisa casar com Paths/Python do [macos-clang-arm64] no craftmaster.ini
+          python-version: '3.12.3'
+
+      - name: Install Inkscape (icon rasterization)
+        run: brew install homebrew/cask/inkscape
+
+      - name: Install Craft + client deps
+        run: |
+          git clone -q --depth=1 https://invent.kde.org/packaging/craftmaster.git "$CRAFT_MASTER_LOCATION"
+          craft() {
+            python "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
+          }
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|stable-34.0|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|stable-34.0|"
+          craft craft
+          craft --install-deps nextcloud-client
+
+      - name: Compile
+        run: |
+          craft() {
+            python "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
+          }
+          # File Provider (arquivos sob demanda) exige assinatura Apple -> fora por ora;
+          # motor de sync classico, igual ao build Windows.
+          craft --options nextcloud-client.buildFileProviderModule=False --src-dir "$GITHUB_WORKSPACE" nextcloud-client
+
+      - name: Patch upstream blueprint (import os + marca Apollo)
+        run: |
+          # Mesmos dois problemas contornados no apollo-release.yml (Windows):
+          # (1) nextcloud-client.py usa os.path.join em createPackage() sem 'import os';
+          # (2) appname/company/productname do blueprint ainda sao Nextcloud.
+          bp="$GITHUB_WORKSPACE/$CRAFT_TARGET/etc/blueprints/locations/craft-blueprints-nextcloud/nextcloud-client/nextcloud-client.py"
+          if [ ! -f "$bp" ]; then echo "[apollo] AVISO: blueprint nao encontrado em $bp"; exit 1; fi
+          python3 - "$bp" <<'PYEOF'
+          import io, re, sys
+          p = sys.argv[1]
+          c = io.open(p, encoding="utf-8").read()
+          if not re.search(r"(?m)^import os\b", c):
+              c = "import os\n" + c
+              print("[apollo] +import os")
+          c = re.sub(r'(?m)(self\.defines\["company"\]\s*=\s*)"Nextcloud GmbH"', r'\1"Apollo Solution"', c)
+          c = re.sub(
+              r'(?m)^([ \t]*)self\.defines\["appname"\]\s*=\s*"nextcloud".*$',
+              r'\1self.defines["appname"] = "apollocloud"\n\1self.defines["productname"] = "ApolloCloud"',
+              c,
+          )
+          io.open(p, "w", encoding="utf-8", newline="").write(c)
+          print("[apollo] blueprint patchado (import os, appname, company, productname)")
+          PYEOF
+          # blacklist.txt: no Windows apagava o executavel renomeado; no mac o app é
+          # um bundle, mas aplicamos a mesma correção por segurança (warn-only).
+          bl="$GITHUB_WORKSPACE/$CRAFT_TARGET/etc/blueprints/locations/craft-blueprints-nextcloud/nextcloud-client/blacklist.txt"
+          if [ -f "$bl" ] && grep -q 'nextcloud|nextcloudcmd|QtWebEngineProcess' "$bl"; then
+            python3 - "$bl" <<'PYEOF'
+          import io, sys
+          p = sys.argv[1]
+          c = io.open(p, encoding="utf-8").read()
+          c = c.replace('nextcloud|nextcloudcmd|QtWebEngineProcess',
+                        'nextcloud|nextcloudcmd|apollocloud|apollocloudcmd|QtWebEngineProcess')
+          io.open(p, "w", encoding="utf-8", newline="").write(c)
+          print("[apollo] blacklist corrigido (preserva apollocloud/apollocloudcmd)")
+          PYEOF
+          else
+            echo "[apollo] blacklist sem o padrao esperado (ok no mac, seguindo)"
+          fi
+
+      - name: Package (.dmg)
+        run: |
+          craft() {
+            python "$CRAFT_MASTER_LOCATION/CraftMaster.py" --config "$CRAFT_MASTER_CONFIG" --target "$CRAFT_TARGET" -c "$@"
+          }
+          craft --package nextcloud-client
+
+      - name: Collect app
+        run: |
+          dest="$GITHUB_WORKSPACE/_dist"
+          mkdir -p "$dest"
+          # o .dmg do app tem dezenas de MB; ignora caches/builds intermediarios
+          # -print0 + xargs -0: caminhos do Craft podem ter espaco ("Apollo Cloud")
+          main=$(find "$GITHUB_WORKSPACE" \( -name "*.dmg" -o -name "*.pkg" \) -size +5M \
+                    -not -path "*/craft-clone/*" -not -path "*/CraftMaster/*" \
+                    -not -path "*/work/build/*" -print0 2>/dev/null | xargs -0 ls -1S 2>/dev/null | head -1)
+          if [ -z "$main" ]; then
+            echo "Nenhum .dmg/.pkg (>5MB) encontrado; diagnostico:"
+            find "$GITHUB_WORKSPACE" \( -name "*.dmg" -o -name "*.pkg" \) -exec ls -lh {} \; 2>/dev/null | head -20
+            exit 1
+          fi
+          ext="${main##*.}"
+          cp "$main" "$dest/ApolloCloud-macOS-arm64.$ext"
+          ls -lh "$dest"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apollo-cloud-macos-app
+          path: ${{ github.workspace }}/_dist/**
+          if-no-files-found: warn
