@@ -75,12 +75,64 @@ jobs:
           if [ -z "$APP" ]; then echo "[apollo] bundle nao encontrado no image"; exit 1; fi
           echo "== bundle: $APP"
           plutil -p "$APP/Contents/Info.plist" | head -12
-          echo "== smoke test (apollocloudcmd --version):"
-          "$APP/Contents/MacOS/apollocloudcmd" --version || echo "[apollo] AVISO: apollocloudcmd --version falhou (exit $?)"
-          echo "== re-sign ad-hoc (belt & braces; macdeployqt ja assinou):"
-          codesign -s - -f --deep --preserve-metadata=identifier,entitlements "$APP" \
-            || echo "[apollo] AVISO: re-sign falhou; mantendo assinatura do macdeployqt"
-          echo "== verificacao estrita (gate):"
+          CRAFT_LIB="$GITHUB_WORKSPACE/$CRAFT_TARGET/lib"
+          QT_BIN="$GITHUB_WORKSPACE/$CRAFT_TARGET/bin"
+
+          # (1) O macdeployqt do POST_BUILD cobre o exe principal, mas o install
+          # reinstala as libs proprias (libapollocloudsync, libapollocloud_csync)
+          # POR CIMA, com dependencias absolutas p/ o craft root -> dyld aborta na
+          # maquina do usuario. 2a passada incluindo cada Mach-O de Contents/MacOS.
+          echo "== macdeployqt 2a passada (libs proprias como -executable):"
+          EXES=()
+          while IFS= read -r -d '' f; do
+            if file "$f" | grep -q "Mach-O"; then EXES+=("-executable=$f"); fi
+          done < <(find "$APP/Contents/MacOS" -type f -print0)
+          "$QT_BIN/macdeployqt" "$APP" -always-overwrite -libpath="$CRAFT_LIB" "${EXES[@]}" \
+            || echo "[apollo] AVISO: macdeployqt 2a passada exit $? (fix loop cobre o resto)"
+
+          # (2) Relativiza qualquer referencia absoluta restante (transitivo).
+          echo "== relativizando referencias absolutas remanescentes:"
+          for round in 1 2 3 4 5 6 7 8 9 10; do
+            leftovers=$(find "$APP" -type f \( -name "*.dylib" -o -path "*/MacOS/*" -o -path "*/Versions/*" \) -print0 \
+              | xargs -0 file 2>/dev/null | grep "Mach-O" | cut -d: -f1 | sort -u | while IFS= read -r bin; do
+                  otool -L "$bin" 2>/dev/null | awk 'NR>1{print $1}' | grep -F "$GITHUB_WORKSPACE" | while IFS= read -r dep; do
+                    printf '%s\t%s\n' "$bin" "$dep"
+                  done
+                done)
+            [ -z "$leftovers" ] && { echo "   (limpo na rodada $round)"; break; }
+            [ "$round" = "10" ] && { echo "[apollo] fix loop nao convergiu"; printf '%s\n' "$leftovers" | head; exit 1; }
+            printf '%s\n' "$leftovers" | while IFS=$'\t' read -r bin dep; do
+              base=$(basename "$dep")
+              if [ ! -e "$APP/Contents/Frameworks/$base" ] && [ -e "$dep" ]; then
+                cp -R "$dep" "$APP/Contents/Frameworks/$base"
+                install_name_tool -id "@rpath/$base" "$APP/Contents/Frameworks/$base" || true
+              fi
+              install_name_tool -change "$dep" "@rpath/$base" "$bin"
+            done
+          done
+          for f in "$APP/Contents/MacOS/"*; do
+            if file "$f" | grep -q "Mach-O 64-bit executable"; then
+              install_name_tool -add_rpath "@loader_path/../Frameworks" "$f" 2>/dev/null || true
+            fi
+          done
+
+          # (3) Gate que teria pegado o bug: rodar SEM o craft root visivel,
+          # simulando a maquina do usuario (dyld so pode resolver dentro do bundle).
+          echo "== smoke test com craft root escondido:"
+          mv "$CRAFT_LIB" "${CRAFT_LIB}.hidden"
+          if "$APP/Contents/MacOS/apollocloudcmd" --version; then
+            echo "[apollo] smoke test autocontido: OK"
+            mv "${CRAFT_LIB}.hidden" "$CRAFT_LIB"
+          else
+            rc=$?
+            mv "${CRAFT_LIB}.hidden" "$CRAFT_LIB"
+            echo "[apollo] FALHOU sem o craft root (exit $rc) — bundle nao autocontido"
+            exit 1
+          fi
+
+          # (4) Assina DEPOIS de toda edicao de binario, verifica e empacota.
+          echo "== sign ad-hoc pos-fixes + verificacao estrita (gate):"
+          codesign -s - -f --deep --preserve-metadata=identifier,entitlements "$APP"
           codesign -vvv --deep --strict "$APP"
           STAGE="$GITHUB_WORKSPACE/_stage"
           mkdir -p "$STAGE"
