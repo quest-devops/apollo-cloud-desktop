@@ -117,7 +117,7 @@ jobs:
           Copy-Item $main.FullName -Destination $target -Force
           Write-Host ("instalador: " + $main.Name + " (" + [math]::Round($main.Length/1MB,1) + " MB) -> " + (Split-Path $target -Leaf))
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: apollo-cloud-windows-installer
           path: ${{ github.workspace }}\_dist\**
