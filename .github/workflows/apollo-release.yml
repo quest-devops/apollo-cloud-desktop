@@ -11,7 +11,10 @@ on:
 jobs:
   build:
     name: Build & Package (Windows)
-    runs-on: windows-2022
+    # windows-2025 (nao 2022): a imagem windows-2022 de ~ago/2026 tem um certificado
+    # malformado no store que mata o pip do Craft com ssl.SSLError [ASN1: NOT_ENOUGH_DATA]
+    # ao carregar o truststore (E5 no ApolloPlan). MSVC 2022 existe nas duas imagens.
+    runs-on: windows-2025
     env:
       CRAFT_TARGET: windows-msvc2022_64-cl
       CRAFT_MASTER_LOCATION: ${{ github.workspace }}\CraftMaster
