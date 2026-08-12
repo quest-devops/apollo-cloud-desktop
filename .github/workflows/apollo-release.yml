@@ -12,9 +12,11 @@ jobs:
   build:
     name: Build & Package (Windows)
     # Manter windows-2022: o Craft (vswhere embutido) NAO detecta o VS na imagem
-    # windows-2025 (testado 12/ago/2026, run 31593606310). O incidente do certificado
-    # malformado no store da 2022 (ssl.SSLError ASN1, 11/ago) foi corrigido pela
-    # propria rolagem de imagem do GitHub — historico na E5 do ApolloPlan.
+    # windows-2025 (testado 12/ago/2026, run 31593606310). A imagem 2022 atual tem
+    # um certificado malformado no store que derruba o python do Craft (openssl
+    # 3.6.3, ASN1 estrito) na SONDAGEM de import do truststore do pip — o shim
+    # sitecustomize abaixo contorna. Upstream nao sente: o cache do Craft deles
+    # pula o pip. Historico completo na E5 do ApolloPlan.
     runs-on: windows-2022
     env:
       CRAFT_TARGET: windows-msvc2022_64-cl
@@ -28,6 +30,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Shim p/ cert malformado no store da imagem (PYTHONPATH sitecustomize)
+        shell: pwsh
+        run: |
+          # A imagem windows-2022 (~ago/2026) tem um certificado que o openssl 3.6.3
+          # do python interno do Craft rejeita (ASN1: NOT_ENOUGH_DATA) na sondagem
+          # de import do truststore do pip. O shim engole SO esse erro de carga em
+          # bloco do store; a validacao HTTPS real do truststore usa a CryptoAPI
+          # por conexao e nao passa por aqui — nada de confianca e enfraquecido.
+          $dir = "${{ github.workspace }}\.ci-shim"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          @'
+          import ssl as _apollo_ssl
+          _apollo_orig = _apollo_ssl.SSLContext._load_windows_store_certs
+          def _apollo_safe(self, storename, purpose):
+              try:
+                  return _apollo_orig(self, storename, purpose)
+              except _apollo_ssl.SSLError:
+                  import sys
+                  print("[apollo-shim] store %s tem cert malformado; pulando carga em bloco" % storename, file=sys.stderr)
+          _apollo_ssl.SSLContext._load_windows_store_certs = _apollo_safe
+          '@ -replace '(?m)^          ', '' | Set-Content -Encoding utf8 "$dir\sitecustomize.py"
+          python -c "import sys; sys.path.insert(0, r'$dir'); import sitecustomize; print('[apollo] shim importa ok')"
+          Add-Content $env:GITHUB_ENV "PYTHONPATH=$dir"
 
       - name: Install Craft + client deps
         shell: pwsh
