@@ -586,6 +586,10 @@ void Systray::setupContextMenu()
         _contextMenu->addAction(tr("Add account"), this, &Systray::openAccountWizard);
     } else {
         _contextMenu->addAction(tr("Open %1 Desktop", "Open Nextcloud main window. Placeholer will be the application name. Please keep it.").arg(APPLICATION_NAME), this, [this]{ showActivitiesWindow(); });
+        // [apollo] "Adicionar conta" sempre no menu de contexto: funcionarios com
+        // conta em mais de um espaco (cdtech+dag) nao descobriam o caminho pelo
+        // menu do avatar da janela — o clique-direito e onde todos procuram.
+        _contextMenu->addAction(tr("Add account"), this, &Systray::openAccountWizard);
     }
 
     auto pauseAction = _contextMenu->addAction(tr("Pause sync"), this, &Systray::slotPauseAllFolders);
