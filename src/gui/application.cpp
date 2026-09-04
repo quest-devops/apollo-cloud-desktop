@@ -107,7 +107,16 @@ namespace {
             return devTrPath;
         }
 #if defined(Q_OS_WIN)
-        return QApplication::applicationDirPath() + QLatin1String("/i18n/");
+        // [apollo] nosso instalador poe o exe em bin/ e a i18n na RAIZ do install;
+        // o caminho padrao (<exe>/i18n) nao existe nesse layout e o app caia p/
+        // ingles ("folder containing translations is missing"). Fallback ../i18n.
+        {
+            const auto binTrPath = QApplication::applicationDirPath() + QLatin1String("/i18n/");
+            if (QDir(binTrPath).exists()) {
+                return binTrPath;
+            }
+            return QApplication::applicationDirPath() + QLatin1String("/../i18n/");
+        }
 #elif defined(Q_OS_MACOS)
         return QApplication::applicationDirPath() + QLatin1String("/../Resources/Translations"); // path defaults to app dir.
 #elif defined(Q_OS_UNIX)
