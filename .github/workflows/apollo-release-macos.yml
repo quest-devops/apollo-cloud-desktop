@@ -75,6 +75,8 @@ jobs:
           if [ -z "$APP" ]; then echo "[apollo] bundle nao encontrado no image"; exit 1; fi
           echo "== bundle: $APP"
           plutil -p "$APP/Contents/Info.plist" | head -12
+          echo "== traducoes no bundle (E6):"
+          ls "$APP/Contents/Resources/Translations/" 2>/dev/null | grep -c "\.qm$" || echo "SEM Translations no bundle"
           CRAFT_LIB="$GITHUB_WORKSPACE/$CRAFT_TARGET/lib"
           QT_BIN="$GITHUB_WORKSPACE/$CRAFT_TARGET/bin"
 
